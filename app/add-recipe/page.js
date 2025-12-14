@@ -19,6 +19,7 @@ export default function AddRecipe() {
     const [imagePreview, setImagePreview] = useState(null);
     const [aiLoading, setAiLoading] = useState(false);
 
+
     // --- Handlers ---
 
     const handleInputChange = (e) => {
@@ -59,6 +60,7 @@ export default function AddRecipe() {
     const handleImageUpload = (e) => {
         const file = e.target.files[0];
         if (file) {
+
             setImageFile(file);
             setImagePreview(URL.createObjectURL(file));
         }
@@ -142,7 +144,6 @@ export default function AddRecipe() {
                     const blob = await imageRes.blob();
                     const file = new File([blob], `${formData.title.replace(/\s+/g, '_')}_ai.png`, { type: 'image/png' });
                     setImageFile(file);
-                    console.log("Image converted to file successfully via proxy");
                 } catch (blobError) {
                     console.error("Could not convert image URL to Blob:", blobError);
                     alert("Image generated! Note: You might need to save this image manually if automatic upload fails.");
@@ -163,6 +164,7 @@ export default function AddRecipe() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
+        setLoading(true);
 
         try {
             let imageUrl = null;
@@ -171,71 +173,94 @@ export default function AddRecipe() {
             if (imageFile) {
                 const fileExt = imageFile.name.split('.').pop();
                 const fileName = `${Date.now()}.${fileExt}`;
-                const { error: uploadError } = await supabase.storage
+
+                const { data: uploadData, error: uploadError } = await supabase.storage
                     .from('recipes')
                     .upload(fileName, imageFile);
 
-                if (uploadError) throw uploadError;
+                if (uploadError) {
+                    console.error("Supabase Upload Error:", uploadError);
+                    throw new Error(`Image Upload Failed: ${uploadError.message}`);
+                }
 
                 // Get Public URL
-                const { data: { publicUrl } } = supabase.storage
+                const { data: publicUrlData } = supabase.storage
                     .from('recipes')
                     .getPublicUrl(fileName);
 
-                imageUrl = publicUrl;
+                if (!publicUrlData || !publicUrlData.publicUrl) {
+                    throw new Error("Failed to retrieve public URL for image");
+                }
+
+                imageUrl = publicUrlData.publicUrl;
             }
 
             // 2. Insert Recipe
+            const recipePayload = {
+                title: formData.title,
+                slug: formData.title.toLowerCase().replace(/ /g, '-').replace(/[^\w-]+/g, ''),
+                cuisine: formData.cuisine,
+                main_ingredient: formData.main_ingredient,
+                description: formData.description,
+                calories: parseInt(formData.calories) || 0,
+                image_url: imageUrl
+            };
+
             const { data: recipeData, error: recipeError } = await supabase
                 .from('recipes')
-                .insert([{
-                    title: formData.title,
-                    slug: formData.title.toLowerCase().replace(/ /g, '-').replace(/[^\w-]+/g, ''),
-                    cuisine: formData.cuisine,
-                    main_ingredient: formData.main_ingredient,
-                    description: formData.description,
-                    calories: parseInt(formData.calories) || 0,
-                    image_url: imageUrl
-                }])
+                .insert([recipePayload])
                 .select()
                 .single();
 
-            if (recipeError) throw recipeError;
+            if (recipeError) {
+                console.error("Supabase Recipe Insert Error:", recipeError);
+                throw new Error(`Recipe Insert Failed: ${recipeError.message} (Code: ${recipeError.code})`);
+            }
 
             // 3. Insert Ingredients
-            const ingredientsToInsert = ingredients.map(ing => ({
-                recipe_id: recipeData.id,
-                item: ing.item,
-                amount: ing.amount,
-                cals: parseInt(ing.cals) || 0
-            }));
+            if (ingredients.length > 0) {
+                const ingredientsToInsert = ingredients.map(ing => ({
+                    recipe_id: recipeData.id,
+                    item: ing.item,
+                    amount: ing.amount,
+                    cals: parseInt(ing.cals) || 0
+                }));
 
-            const { error: ingError } = await supabase
-                .from('ingredients')
-                .insert(ingredientsToInsert);
+                const { error: ingError } = await supabase
+                    .from('ingredients')
+                    .insert(ingredientsToInsert);
 
-            if (ingError) throw ingError;
+                if (ingError) {
+                    console.error("Supabase Ingredient Insert Error:", ingError);
+                    throw new Error(`Ingredient Insert Failed: ${ingError.message}`);
+                }
+            }
 
             // 4. Insert Instructions
-            const instructionsToInsert = instructions.map((step, idx) => ({
-                recipe_id: recipeData.id,
-                step_number: idx + 1,
-                description: step
-            }));
+            if (instructions.length > 0) {
+                const instructionsToInsert = instructions.map((step, idx) => ({
+                    recipe_id: recipeData.id,
+                    step_number: idx + 1,
+                    description: step
+                }));
 
-            const { error: instError } = await supabase
-                .from('instructions')
-                .insert(instructionsToInsert);
+                const { error: instError } = await supabase
+                    .from('instructions')
+                    .insert(instructionsToInsert);
 
-            if (instError) throw instError;
+                if (instError) {
+                    console.error("Supabase Instruction Insert Error:", instError);
+                    throw new Error(`Instruction Insert Failed: ${instError.message}`);
+                }
+            }
 
             // Success
             alert('Recipe added successfully!');
             router.push('/');
 
         } catch (error) {
-            console.error('Error adding recipe:', error);
-            alert('Error adding recipe: ' + error.message);
+            console.error('Submission Error:', error);
+            alert(`Error adding recipe: ${error.message}`);
         } finally {
             setLoading(false);
         }
